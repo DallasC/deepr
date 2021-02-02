@@ -1,11 +1,15 @@
-# Deepr
-A Deep Reinforcement Learning(DRL) pipeline for Rust.
+<div align="center">
+  <h1>DeepR</h1>
+  <p>
+    <strong>A Deep Reinforcement Learning pipeline for Rust.</strong>
+  </p>
+</div>
 
-The goal is to simplify the implementation process of developing a DRL models, abstracting away the model implementation. Currently thist crate supports [Softmax Deep Double Double Deterministic Policy Gradients (SD3](https://arxiv.org/pdf/2010.09177v1.pdf) with pytorch.
+## Goal
+> NOTE: Right now this is still in it's early stages and is undergoing a lot of changes
+The goal of Deepr is to simplify the process of developing Deep Reinforcement Learning(DRL) models. Ideally someone without any AI experience should be able to easily create state of the art DRL models and then all they have to do is host them somewhere. 
 
-## TODO
-- Docs & Examples
-- Tensorflow Support   
-Right we use pytorch for our models, it would be nice to have an feature flag to optionally use tensorflow instead.
-- Additional Models   
-Right now we only support [SD3](https://arxiv.org/pdf/2010.09177v1.pdf). It would be nice to include different optional models like TRPO, SAC, HER. Maybe also include some model based approaches like MBVE but that might be suited for a different crate. 
+Currently this crate supports [Softmax Deep Double Deterministic Policy Gradients (SD3](https://arxiv.org/pdf/2010.09177v1.pdf) with pytorch. 
+
+
+

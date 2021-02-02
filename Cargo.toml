@@ -4,5 +4,15 @@ version = "0.1.0"
 authors = ["Dallas Coble <dallascoble@outlook.com>"]
 edition = "2018"
 
+description = "Easy to use Deep Reinforcement Learning pipeline for Rust"
+readme = "Readme.md"
+repository = "https://github.com/dallasc/deepr"
+license = "MIT OR Apache-2.0"
+keywords = ["deep-learning", "reinforcement-learning", "machine-learning"]
+categories = ["science"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
 [dependencies]
 tch = "0.3.1"
