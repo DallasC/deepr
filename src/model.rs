@@ -1,5 +1,6 @@
 use std::f64::consts::PI;
-use tch::{kind::FLOAT_CPU, nn, nn::OptimizerConfig, Device, Kind::Float, Tensor};
+use std::mem::drop;
+use tch::{kind::FLOAT_CPU, nn, nn::OptimizerConfig, Device, Kind::Float, Reduction::Mean, Tensor};
 
 use crate::utils::ReplayBuffer;
 
@@ -284,14 +285,36 @@ impl SD3 {
         }
     }
 
-    fn train(&mut self, batch_size: usize, q1: bool) {
-        let (states, actions, reward, mut next_state, not_done) =
+    fn select_action(&mut self, states: &Tensor) -> Tensor {
+        let state = states.reshape(&[1, -1]);
+
+        let action1 = self.actor1.forward(&state);
+        let action2 = self.actor2.forward(&state);
+
+        let q1 = self.critic1.forward(&state, &action1).double_value(&[]);
+        let q2 = self.critic2.forward(&state, &action2).double_value(&[]);
+
+        let action = if q1 > q2 { action1 } else { action2 };
+
+        action.data()
+    }
+
+    fn train(&mut self, batch_size: usize) {
+        self.softmax_train(batch_size, true);
+        self.softmax_train(batch_size, false);
+    }
+
+    fn softmax_train(&mut self, batch_size: usize, q1: bool) {
+        // Get state and stuff from replay buffer
+        let (state, action, reward, mut next_state, not_done) =
             match self.replay_buffer.sample(batch_size) {
                 Some(v) => v,
                 _ => return, // We don't have enough samples for training yet.
             };
 
+        // Disable Tracking of gradients while getting softmax value
         let no_grad = tch::no_grad_guard();
+
         let mut next_action: Tensor;
         if q1 {
             next_action = self.actor1_target.forward(&next_state);
@@ -301,9 +324,9 @@ impl SD3 {
 
         let mut noise = Tensor::randn(
             &[
-                actions.size()[0],
+                action.size()[0],
                 self.config.num_noise_samples,
-                actions.size()[1],
+                action.size()[1],
             ],
             FLOAT_CPU,
         ) * self.config.policy_noise;
@@ -342,8 +365,8 @@ impl SD3 {
         let mut numerator = &next_q * &denominator;
 
         if self.config.with_importance_sampling {
-            numerator = numerator / &noise_pdf;
-            denominator = denominator / &noise_pdf;
+            numerator /= &noise_pdf;
+            denominator /= &noise_pdf;
         }
 
         let sum_numerator = numerator.sum1(&[1], false, Float);
@@ -353,5 +376,124 @@ impl SD3 {
 
         let target_q = reward + not_done * self.config.discount * softmax_q_vals;
 
+        drop(no_grad);
+
+        if q1 {
+            let current_q = self.critic1.forward(&state, &action);
+
+            let critic1_loss = current_q.mse_loss(&target_q, Mean);
+            self.critic1.optimizer.zero_grad();
+            critic1_loss.backward();
+            self.critic1.optimizer.step();
+
+            let actor1_loss = -self
+                .critic1
+                .forward(&state, &self.actor1.forward(&state))
+                .mean(Float);
+            self.actor1.optimizer.zero_grad();
+            actor1_loss.backward();
+            self.actor1.optimizer.step();
+
+            track(
+                &mut self.critic1_target.var_store,
+                &self.critic1.var_store,
+                self.config.tau,
+            );
+
+            track(
+                &mut self.actor1_target.var_store,
+                &self.actor1.var_store,
+                self.config.tau,
+            );
+        } else {
+            let current_q = self.critic2.forward(&state, &action);
+
+            let critic2_loss = current_q.mse_loss(&target_q, Mean);
+            self.critic2.optimizer.zero_grad();
+            critic2_loss.backward();
+            self.critic2.optimizer.step();
+
+            let actor2_loss = -self
+                .critic2
+                .forward(&state, &self.actor2.forward(&state))
+                .mean(Float);
+            self.actor2.optimizer.zero_grad();
+            actor2_loss.backward();
+            self.actor2.optimizer.step();
+
+            track(
+                &mut self.critic2_target.var_store,
+                &self.critic2.var_store,
+                self.config.tau,
+            );
+
+            track(
+                &mut self.actor2_target.var_store,
+                &self.actor2.var_store,
+                self.config.tau,
+            );
+        }
     }
+
+    fn save(&mut self, filename: &str) {
+        if let Err(err) = self
+            .critic1
+            .var_store
+            .save(format!("{}_critic1.ot", filename))
+        {
+            println!("error while saving critic1 var_store: {}", err)
+        }
+        if let Err(err) = self
+            .critic2
+            .var_store
+            .save(format!("{}_critic2.ot", filename))
+        {
+            println!("error while saving critic2 var_store: {}", err)
+        }
+        if let Err(err) = self
+            .actor1
+            .var_store
+            .save(format!("{}_actor1.ot", filename))
+        {
+            println!("error while saving actor1 var_store: {}", err)
+        }
+        if let Err(err) = self
+            .actor2
+            .var_store
+            .save(format!("{}_actor2.ot", filename))
+        {
+            println!("error while saving actor2 var_store: {}", err)
+        }
+    }
+
+    fn load(&mut self, filename: &str) {
+        self.critic1
+            .var_store
+            .load(format!("{}_critic1.ot", filename))
+            .unwrap();
+        self.critic2
+            .var_store
+            .load(format!("{}_critic2.ot", filename))
+            .unwrap();
+        self.actor1
+            .var_store
+            .load(format!("{}_actor1.ot", filename))
+            .unwrap();
+        self.actor2
+            .var_store
+            .load(format!("{}_actor2.ot", filename))
+            .unwrap();
+    }
+}
+
+fn track(dest: &mut nn::VarStore, src: &nn::VarStore, tau: f64) {
+    tch::no_grad(|| {
+        for (dest, src) in dest
+            .trainable_variables()
+            .iter_mut()
+            .zip(src.trainable_variables().iter())
+        {
+            dest.copy_(&(tau * src + (1.0 - tau) * &*dest));
+        }
+    })
 }
